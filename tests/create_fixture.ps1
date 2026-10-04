@@ -11,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Security
 
 $objectName = if ($Arch -eq '386') { 'ChromiumKeyDump.x86.o' } else { 'ChromiumKeyDump.x64.o' }
 $object = "build/$objectName"
