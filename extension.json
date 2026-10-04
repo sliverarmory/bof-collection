@@ -5,7 +5,8 @@
     "extension_author": "c2biz",
     "original_author": "rxwx",
     "repo_url": "https://github.com/sliverarmory/bof-collection",
-    "help": "Dump Chrome/Edge Masterkey",
+    "help": "Decrypt a Chrome or Edge Local State master key",
+    "long_help": "Pass the full path to the Chrome or Edge User Data\\Local State file. Requires a Sliver client, server, and implant with built-in Reflektor BOF support.",
     "bof_executor": "reflektor",
     "entrypoint": "go",
     "files": [
@@ -22,9 +23,9 @@
     ],
     "arguments": [
         {
-            "name": "browser",
-            "desc": "0=chrome, 1=edge",
-            "type": "int",
+            "name": "path",
+            "desc": "Full path to the Chrome or Edge User Data\\Local State file",
+            "type": "string",
             "optional": false
         }
     ]

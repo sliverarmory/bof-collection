@@ -31,26 +31,9 @@ if ([Convert]::ToBase64String($roundTrip) -ne $expected) {
     throw 'DPAPI fixture round trip failed'
 }
 
-$browserId = $null
-$localState = $null
-$localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-if ([string]::IsNullOrWhiteSpace($localAppData)) {
-    throw 'Could not resolve the current user LocalAppData folder'
-}
-foreach ($candidate in @(
-    @{ Id = 0; Path = (Join-Path $localAppData 'Google\Chrome\User Data\Local State') },
-    @{ Id = 1; Path = (Join-Path $localAppData 'Microsoft\Edge\User Data\Local State') }
-)) {
-    if (-not (Test-Path -LiteralPath $candidate.Path)) {
-        $browserId = $candidate.Id
-        $localState = $candidate.Path
-        break
-    }
-}
-if ($null -eq $localState) {
-    throw 'Both browser Local State paths already exist; refusing to overwrite them'
-}
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $localState) | Out-Null
+$fixtureDir = Join-Path $env:RUNNER_TEMP 'chromiumkeydump-bof-e2e'
+New-Item -ItemType Directory -Force -Path $fixtureDir | Out-Null
+$localState = Join-Path $fixtureDir 'Local State'
 $blob = [byte[]]([System.Text.Encoding]::ASCII.GetBytes('DPAPI') + $protected)
 $encryptedKey = [Convert]::ToBase64String($blob)
 $json = '{"os_crypt":{"encrypted_key":"' + $encryptedKey + '"}}'
@@ -74,7 +57,7 @@ $manifest = @{
                 @{
                     name = 'chromium-dpapi-masterkey'
                     object = $object
-                    args = @(@{ type = 'int'; value = $browserId })
+                    args = @(@{ type = 'string'; value = $localState })
                     expect = @{
                         output = @{
                             contains = @("[ChromiumKeyDump] Masterkey: $expected")
@@ -89,4 +72,4 @@ $manifest = @{
 $manifestFile = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $ManifestPath))
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $manifestFile) | Out-Null
 [System.IO.File]::WriteAllText($manifestFile, ($manifest | ConvertTo-Json -Depth 12), $utf8)
-Write-Host "Created synthetic browser $browserId Local State fixture and windows/$Arch BOF test manifest"
+Write-Host "Created synthetic Local State fixture and windows/$Arch BOF test manifest"

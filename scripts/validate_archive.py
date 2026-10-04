@@ -62,10 +62,10 @@ def main() -> None:
     require({(entry["os"], entry["arch"], entry["path"]) for entry in manifest["files"]} == TARGETS,
             "manifest target map does not match objects")
     require(len(manifest.get("arguments", [])) == 1 and
-            manifest["arguments"][0].get("name") == "browser" and
-            manifest["arguments"][0].get("type") == "int" and
+            manifest["arguments"][0].get("name") == "path" and
+            manifest["arguments"][0].get("type") == "string" and
             manifest["arguments"][0].get("optional") is False,
-            "BOF browser argument contract changed")
+            "BOF path argument contract changed")
     for name, machine in MACHINES.items():
         require(payload[name][:2] == machine, f"{name} is not the expected COFF architecture")
         require(len(payload[name]) > 20, f"{name} is empty or truncated")

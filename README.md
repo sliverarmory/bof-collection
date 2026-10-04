@@ -1,9 +1,9 @@
 # Various BOF collection
 
-| Name               | Description| 
-| ------------------ | ---------------------- | 
-| ChromiumKeyDump    | BOF implementation of [Chlonium](https://github.com/rxwx/chlonium) tool to dump Chrome/Edge Masterkey and download Cookie/Login Data files   | 
-| Sleeper            | BOF to call the SetThreadExecutionState function to prevent host from `Sleeping` | 
+| Name               | Description|
+| ------------------ | ---------------------- |
+| ChromiumKeyDump    | BOF implementation of [Chlonium](https://github.com/rxwx/chlonium) tool to dump Chrome/Edge Masterkey and download Cookie/Login Data files   |
+| Sleeper            | BOF to call the SetThreadExecutionState function to prevent host from `Sleeping` |
 
 ### How to compile:
 
@@ -19,7 +19,7 @@ x64:
 cl.exe /c /GS- /TP BOF.cpp /FoBOF.x64.o
 ```
 
-- MinGW: 
+- MinGW:
 
 ```
 x86: i686-w64-mingw32-gcc -c BOF.cpp -o BOF.o
@@ -29,23 +29,33 @@ x64: x86_64-w64-mingw32-gcc -c BOF.cpp -o BOF.x64.o
 
 ## ChromiumKeyDump
 
-The Sliver Armory package runs this BOF with the built-in Reflektor executor.
-Use `chromiumkeydump 0` for Chrome or `chromiumkeydump 1` for Edge; the integer
-browser argument is unchanged. The BOF reads the current Windows user's
-`Local State` file and decrypts its DPAPI-protected master key. This package
-requires a Sliver client, server, and implant with built-in BOF support.
-Cookie and login-file downloads below are provided by the separate Cobalt
-Strike `.cna` script.
+The Sliver Armory package runs the ChromiumKeyDump BOF through the built-in
+Reflektor executor. Supply the full path to the browser's `Local State` file,
+for example `C:\Users\Alice\AppData\Local\Google\Chrome\User Data\Local State`
+or `C:\Users\Alice\AppData\Local\Microsoft\Edge\User Data\Local State`.
+The BOF reads and decrypts that file's DPAPI-protected master key under the
+current Windows user. The cookie and login-file downloads described below are
+implemented by the separate Cobalt Strike `.cna` script; they are not part of
+the Sliver Armory extension.
+
+The updated BOF accepts a path string. Earlier Armory releases accepted an
+integer browser selector, so callers must update their command arguments.
 
 ### Usage:
 ```
-chromiumkeydump [edge|chrome] [argument(required)]
-               Arguments      Description
-               ---------      -----------
-               masterkey      Dump Masterkey
-               cookies        Download Chrome Cookies file
-               logindata      Download Chrome Login Data file
-               all            Dump Masterkey and download files
+chromiumkeydump [edge|chrome] [argument(required)] [ChromePath(optional)]
+                Arguments       Description
+                ---------       -----------
+                masterkey       Dump Masterkey
+                cookies         Download Chrome Cookies file
+                logindata       Download Chrome Login Data file
+                all             Dump Masterkey and download files
+
+                ChromePath      Path to custom installation directory
+                                !Set the path to where the [User Data] folder is located!
+
+                                Example: D:\\Programs\\
+                                         C:\\Users\\USER\\AppData\\Local
 ```
 ### References:
 https://github.com/rxwx/chlonium
@@ -61,7 +71,7 @@ sleeper [argument(required)]
                ---------      -----------
                off            Set the `ES_CONTINUOUS` flag and return to Default state
                on             Set the `ES_SYSTEM_REQUIRED` flag to prevent the Sleep
-               force          Set the `ES_SYSTEM_REQUIRED|ES_AWAYMODE_REQUIRED` flags to prevent the Sleep, 
+               force          Set the `ES_SYSTEM_REQUIRED|ES_AWAYMODE_REQUIRED` flags to prevent the Sleep,
                               even if the Sleep button is pressed
 ```
 ### References:
