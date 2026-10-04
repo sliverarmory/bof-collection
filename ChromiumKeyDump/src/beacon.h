@@ -43,7 +43,7 @@ DECLSPEC_IMPORT void    BeaconFormatInt(formatp * format, int value);
 #define CALLBACK_ERROR       0x0d
 #define CALLBACK_OUTPUT_UTF8 0x20
 
-DECLSPEC_IMPORT void   BeaconPrintf(int type, char * fmt, ...);
+DECLSPEC_IMPORT void   BeaconPrintf(int type, const char * fmt, ...);
 DECLSPEC_IMPORT void   BeaconOutput(int type, char * data, int len);
 
 /* Token Functions */

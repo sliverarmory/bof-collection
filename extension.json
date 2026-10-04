@@ -6,7 +6,7 @@
     "original_author": "rxwx",
     "repo_url": "https://github.com/sliverarmory/bof-collection",
     "help": "Dump Chrome/Edge Masterkey",
-    "depends_on": "coff-loader",
+    "bof_executor": "reflektor",
     "entrypoint": "go",
     "files": [
         {

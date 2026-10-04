@@ -1,62 +1,249 @@
-name: Release
+name: BOF validation and release
 
 on:
+  pull_request:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
     branches: [main]
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bof-collection-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  bof-build:
-    name: Build and publish tagged release
-    if: startsWith( github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  build:
+    name: Build and validate unsigned package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      archive_sha256: ${{ steps.digest.outputs.archive_sha256 }}
     steps:
-      - name: OS Packages
-        run: |
-          sudo apt-get update --fix-missing && sudo apt-get -y install \
-          git build-essential zlib1g zlib1g-dev wget zip unzip \
-          mingw-w64 binutils-mingw-w64 g++-mingw-w64 gcc-multilib jq
-
-      - name: Minisign
-        run: |
-          MINISIGN_TMP=`mktemp -d`
-          cd $MINISIGN_TMP
-          wget https://github.com/aead/minisign/releases/download/v0.2.0/minisign-linux-amd64.tar.gz
-          tar xvf minisign-linux-amd64.tar.gz
-          mv ./minisign ~/minisign
-
-      - name: Check out code
-        uses: actions/checkout@v2
-
-      - name: Git Fetch Tags
-        run: git fetch --prune --unshallow --tags -f
-
-      - name: Build artifacts
-        run: |
-          cd ChromiumKeyDump/src/
-          i686-w64-mingw32-gcc -c ChromiumKeyDump.cpp -o ChromiumKeyDump.x86.o
-          x86_64-w64-mingw32-gcc -c ChromiumKeyDump.cpp -o ChromiumKeyDump.x64.o
-          cd ../../
-          mkdir artifacts
-          VERSION=$(git describe --tags --abbrev=0)
-          cat extension.json | jq ".version |= \"$VERSION\"" > ./artifacts/extension.json
-          mv ChromiumKeyDump/src/*.o artifacts
-          cd artifacts
-          tar -czvf ../chromiumkeydump.tar.gz .
-
-      - name: Sign Package
-        run: |
-          touch ~/minisign.key && chmod 600 ~/minisign.key
-          echo -e "${{ secrets.MINISIGN_PRIVATE_KEY }}" > ~/minisign.key
-          MANIFEST=$(cat ./artifacts/extension.json | base64 -w 0)
-          bash -c "echo \"\" | ~/minisign -s ~/minisign.key -S -m ./chromiumkeydump.tar.gz -t \"$MANIFEST\" -x chromiumkeydump.minisig"
-
-      - name: "Publish Release"
-        uses: "marvinpinto/action-automatic-releases@latest"
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          prerelease: false
-          files: |
-            ./chromiumkeydump.tar.gz
-            ./chromiumkeydump.minisig
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="${GITHUB_REF#refs/tags/}"
+            [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid package tag' >&2; exit 1; }
+            [[ "$(git rev-parse "refs/tags/$version^{commit}")" == "$(git rev-parse HEAD)" ]] || { echo 'Tag does not point to checkout HEAD' >&2; exit 1; }
+          else
+            version=v0.0.0
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Windows cross-compilers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-mingw-w64-i686 g++-mingw-w64-x86-64
+
+      - name: Build BOFs and unsigned package
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash scripts/build.sh
+          python3 scripts/package.py --tag "$PACKAGE_VERSION" --output-dir release --objects-dir build
+          python3 scripts/validate_archive.py --archive release/chromiumkeydump.tar.gz --tag "$PACKAGE_VERSION"
+          tar -xOzf release/chromiumkeydump.tar.gz ./ChromiumKeyDump.x86.o | cmp - build/ChromiumKeyDump.x86.o
+          tar -xOzf release/chromiumkeydump.tar.gz ./ChromiumKeyDump.x64.o | cmp - build/ChromiumKeyDump.x64.o
+
+      - name: Record archive digest
+        id: digest
+        shell: bash
+        run: echo "archive_sha256=$(sha256sum release/chromiumkeydump.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tested BOF objects
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bof-objects
+          path: build/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload unsigned package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-package
+          path: release/chromiumkeydump.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  bof-e2e:
+    name: Reflektor ${{ matrix.target }}
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows/amd64
+            arch: amd64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Download exact build objects
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bof-objects
+          path: build
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.27.1
+          cache: false
+
+      - name: Create synthetic Chromium Local State and test manifest
+        shell: powershell
+        run: ./tests/create_fixture.ps1 -Arch '${{ matrix.arch }}' -SliverVersion '7a2b58ade8cdda20768e56dee07aea8cc3fdb56d'
+
+      - name: Run session and beacon BOF tests
+        uses: sliverarmory/sliver-test-bof@b25b1175aa7595929aa847d89d27e645b96ebf99
+        with:
+          manifest: .github/sliver-bof-e2e.generated.yml
+          target: ${{ matrix.target }}
+
+      - name: Upload BOF test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bof-e2e-${{ matrix.arch }}
+          path: .sliver-bof-e2e/results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    name: Sign and publish tested package
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: [build, bof-e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: armory-release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download tested unsigned package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-package
+          path: release
+
+      - name: Revalidate tag, archive, and license before secret access
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/tags/$PACKAGE_VERSION" ]] || { echo 'Build/tag version mismatch' >&2; exit 1; }
+          [[ "$PACKAGE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid package tag' >&2; exit 1; }
+          [[ "$(git rev-parse "refs/tags/$PACKAGE_VERSION^{commit}")" == "$(git rev-parse HEAD)" ]] || { echo 'Tag does not point to checkout HEAD' >&2; exit 1; }
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse refs/remotes/origin/main)" ]] || { echo 'Tag is not at the current main commit' >&2; exit 1; }
+          actual_sha256="$(sha256sum release/chromiumkeydump.tar.gz | cut -d' ' -f1)"
+          [[ "$actual_sha256" == "$EXPECTED_SHA256" ]] || { echo 'Archive digest changed after testing' >&2; exit 1; }
+          python3 scripts/validate_archive.py --archive release/chromiumkeydump.tar.gz --tag "$PACKAGE_VERSION"
+          python3 - <<'PY'
+          import re
+          import tarfile
+
+          with tarfile.open('release/chromiumkeydump.tar.gz', 'r:gz') as archive:
+              licenses = [
+                  member for member in archive.getmembers()
+                  if re.fullmatch(r'(?:\./)?(?:LICENSE|LICENCE|COPYING)(?:[._-][^/]*)?', member.name)
+                  and member.isfile() and member.size > 0
+              ]
+          if not licenses:
+              raise SystemExit('No nonempty LICENSE/COPYING file in package; publication is blocked')
+          PY
+
+      - name: Install pinned Ubuntu Minisign package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign=0.11-1
+          [[ "$(dpkg-query -W -f='${Version}' minisign)" == '0.11-1' ]]
+          dpkg -V minisign
+
+      - name: Sign and verify archive
+        id: sign
+        shell: bash
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$MINISIGN_PRIVATE_KEY" ]] || { echo 'MINISIGN_PRIVATE_KEY is missing' >&2; exit 1; }
+          manifest_b64="$(tar -xOzf release/chromiumkeydump.tar.gz ./extension.json | base64 -w0)"
+          umask 077
+          key_file="$(mktemp "$RUNNER_TEMP/bof-collection-minisign.XXXXXXXX")"
+          echo "key_file=$key_file" >> "$GITHUB_OUTPUT"
+          trap 'rm -f -- "$key_file"' EXIT
+          python3 - "$key_file" <<'PY'
+          import os
+          import sys
+
+          key = os.environ['MINISIGN_PRIVATE_KEY']
+          if '\n' not in key and '\\n' in key:
+              key = key.replace('\\n', '\n')
+          with open(sys.argv[1], 'wb') as output:
+              output.write(key.encode('utf-8'))
+              if not key.endswith('\n'):
+                  output.write(b'\n')
+          PY
+          unset MINISIGN_PRIVATE_KEY
+          printf '\n' | minisign -S -s "$key_file" -m release/chromiumkeydump.tar.gz -x release/chromiumkeydump.minisig -t "$manifest_b64"
+          minisign -Vm release/chromiumkeydump.tar.gz -x release/chromiumkeydump.minisig -P 'RWSN/EmkY2pASCHFwyP7aS0fO7sb6cq7KP3NNHWRq/bzKF0jZABv8BvA'
+          signed_b64="$(sed -n '3s/^trusted comment: //p' release/chromiumkeydump.minisig)"
+          [[ "$signed_b64" == "$manifest_b64" ]] || { echo 'Trusted comment differs from archived manifest bytes' >&2; exit 1; }
+
+      - name: Ensure signing key is removed
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SIGNING_KEY_FILE: ${{ steps.sign.outputs.key_file }}
+        run: |
+          if [[ -n "$SIGNING_KEY_FILE" && "$SIGNING_KEY_FILE" == "$RUNNER_TEMP"/bof-collection-minisign.* ]]; then
+            rm -f -- "$SIGNING_KEY_FILE"
+          fi
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$PACKAGE_VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to replace assets' >&2
+            exit 1
+          fi
+          gh release create "$PACKAGE_VERSION" \
+            release/chromiumkeydump.tar.gz release/chromiumkeydump.minisig \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "$PACKAGE_VERSION" \
+            --notes 'ChromiumKeyDump BOF package for Sliver Reflektor'

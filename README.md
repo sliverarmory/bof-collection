@@ -29,6 +29,14 @@ x64: x86_64-w64-mingw32-gcc -c BOF.cpp -o BOF.x64.o
 
 ## ChromiumKeyDump
 
+The Sliver Armory package runs this BOF with the built-in Reflektor executor.
+Use `chromiumkeydump 0` for Chrome or `chromiumkeydump 1` for Edge; the integer
+browser argument is unchanged. The BOF reads the current Windows user's
+`Local State` file and decrypts its DPAPI-protected master key. This package
+requires a Sliver client, server, and implant with built-in BOF support.
+Cookie and login-file downloads below are provided by the separate Cobalt
+Strike `.cna` script.
+
 ### Usage:
 ```
 chromiumkeydump [edge|chrome] [argument(required)]
