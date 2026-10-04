@@ -192,16 +192,28 @@ jobs:
           echo "key_file=$key_file" >> "$GITHUB_OUTPUT"
           trap 'rm -f -- "$key_file"' EXIT
           python3 - "$key_file" <<'PY'
+          import base64
+          import binascii
           import os
           import sys
 
           key = os.environ['MINISIGN_PRIVATE_KEY']
-          if '\n' not in key and '\\n' in key:
-              key = key.replace('\\n', '\n')
+          key = key.replace('\\r\\n', '\n').replace('\\n', '\n').replace('\\r', '\n')
+          key = key.replace('\r\n', '\n').replace('\r', '\n')
+          lines = [line.strip() for line in key.splitlines() if line.strip()]
+          if len(lines) == 1:
+              lines.insert(0, 'untrusted comment: minisign secret key')
+          if len(lines) != 2 or not lines[0].startswith('untrusted comment: '):
+              raise SystemExit('Invalid Minisign secret key structure')
+          try:
+              decoded = base64.b64decode(lines[1], validate=True)
+          except (binascii.Error, ValueError):
+              raise SystemExit('Invalid Minisign secret key encoding') from None
+          if (len(decoded) != 158 or decoded[:2] != b'Ed' or
+                  decoded[2:4] not in (b'Sc', b'\0\0') or decoded[4:6] != b'B2'):
+              raise SystemExit('Unsupported Minisign secret key format')
           with open(sys.argv[1], 'wb') as output:
-              output.write(key.encode('utf-8'))
-              if not key.endswith('\n'):
-                  output.write(b'\n')
+              output.write(('\n'.join(lines) + '\n').encode('utf-8'))
           PY
           unset MINISIGN_PRIVATE_KEY
           printf '\n' | minisign -S -s "$key_file" -m release/chromiumkeydump.tar.gz -x release/chromiumkeydump.minisig -t "$manifest_b64"
