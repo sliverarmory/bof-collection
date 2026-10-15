@@ -117,7 +117,7 @@ jobs:
         run: ./tests/create_fixture.ps1 -Arch '${{ matrix.arch }}' -SliverVersion '7a2b58ade8cdda20768e56dee07aea8cc3fdb56d'
 
       - name: Run session and beacon BOF tests
-        uses: sliverarmory/sliver-test-bof@b25b1175aa7595929aa847d89d27e645b96ebf99
+        uses: sliverarmory/sliver-test-bof@b38a09a226bf861a1e56e9dbe07838fe99138582
         with:
           manifest: .github/sliver-bof-e2e.generated.yml
           target: ${{ matrix.target }}
